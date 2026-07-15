@@ -65,11 +65,6 @@ real system architecture — no Python or Node installed locally.
 **Prerequisites:** Docker (with Compose).
 
 ```bash
-# 1. Configure environment (secrets are read from .env, never baked into the image)
-cp .env.example .env
-# Edit .env — set SECRET_KEY and FERNET_KEY (see .env.example for generation commands)
-
-# 2. Build and start
 docker compose up --build
 ```
 

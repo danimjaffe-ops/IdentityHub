@@ -9,9 +9,6 @@ build/
 # Virtual environment
 .venv/
 
-# Environment variables
-.env
-
 # Flask instance folder
 instance/
 

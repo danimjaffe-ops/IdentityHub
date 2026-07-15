@@ -1,0 +1,5 @@
+# Keep LF in the repository, and force LF on checkout for shell scripts. Without
+# this, Git on Windows checks entrypoint.sh out with CRLF, which breaks the
+# shebang inside the Linux container (exec looks for an interpreter "/bin/sh\r").
+* text=auto
+*.sh text eol=lf

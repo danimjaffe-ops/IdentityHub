@@ -1,0 +1,14 @@
+flask==3.1.1
+flask-sqlalchemy==3.1.1
+flask-migrate==4.1.0
+flask-login==0.6.3
+flask-cors==5.0.1
+flask-swagger-ui==5.32.8
+bcrypt==4.2.1
+cryptography==44.0.0
+requests==2.32.3
+python-dotenv==1.1.0
+anthropic==0.52.0
+beautifulsoup4==4.13.4
+lxml==5.4.0
+gunicorn==23.0.0

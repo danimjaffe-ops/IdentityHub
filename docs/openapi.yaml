@@ -1,0 +1,616 @@
+openapi: 3.1.0
+info:
+  title: IdentityHub REST API
+  version: "1.0.0"
+  description: |
+    REST API for IdentityHub — turn Non-Human Identity (NHI) findings into
+    tracked **Jira** tickets from scanners, CI/CD, or the web UI.
+
+    ## Authentication
+
+    Two mechanisms are supported:
+
+    - **Session cookie** (`session`) — issued by `POST /api/auth/login` (or
+      `/register`). Used by the web UI and required by every endpoint except
+      where noted.
+    - **API key** (`X-API-Key` header) — a key with the `nhk_` prefix, generated
+      from `POST /api/keys`. Accepted **only** on the ticket endpoints
+      (`POST /api/tickets`, `GET /api/tickets`), which is where automation runs.
+
+    Endpoints that accept either list both schemes; a request needs to satisfy
+    just one of them.
+
+    ## Errors
+
+    Errors return `{ "error": "<name>", "message": "<human message>" }` with the
+    matching HTTP status. Jira upstream problems surface as `502` (Jira error) or
+    `503` (Jira unreachable).
+
+servers:
+  - url: /
+    description: Same origin as the running app (e.g. http://localhost:5000)
+
+tags:
+  - name: Auth
+    description: Account registration, login, session, and profile.
+  - name: Jira
+    description: Connect a Jira workspace and list its projects.
+  - name: Tickets
+    description: Create and list Jira tickets. Accepts session cookie or API key.
+  - name: API Keys
+    description: Generate, list, and revoke API keys for automation.
+
+paths:
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new account
+      description: Creates an account and starts a login session (sets the cookie).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Account created; session started.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in
+      description: Validates credentials and starts a login session (sets the cookie).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Logged in; session started.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Log out
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Message"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/auth/account:
+    delete:
+      tags: [Auth]
+      summary: Delete the current account
+      description: Permanently deletes the account and all associated data.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Message"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Get the current user
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: The authenticated user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/jira/credentials:
+    post:
+      tags: [Jira]
+      summary: Connect (or replace) Jira credentials
+      description: |
+        Validates the credentials against Jira and stores them encrypted at rest.
+        Re-connecting replaces the existing credentials.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JiraCredentialsRequest"
+      responses:
+        "201":
+          description: Connected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JiraStatus"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          $ref: "#/components/responses/JiraError"
+        "503":
+          $ref: "#/components/responses/JiraUnavailable"
+    delete:
+      tags: [Jira]
+      summary: Disconnect Jira
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          $ref: "#/components/responses/Message"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/jira/status:
+    get:
+      tags: [Jira]
+      summary: Get Jira connection status
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Connection status (fields are null when not connected).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JiraStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/jira/projects:
+    get:
+      tags: [Jira]
+      summary: List Jira projects
+      description: Projects the connected account can access.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Projects.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  projects:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Project"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          $ref: "#/components/responses/JiraError"
+        "503":
+          $ref: "#/components/responses/JiraUnavailable"
+
+  /api/tickets:
+    post:
+      tags: [Tickets]
+      summary: Create a Jira ticket
+      description: |
+        Files an NHI finding as a Jira issue. Requires a connected Jira
+        workspace. Tickets are **not** persisted locally — Jira is the source of
+        truth.
+      security:
+        - sessionCookie: []
+        - apiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TicketCreateRequest"
+      responses:
+        "201":
+          description: Ticket created in Jira.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TicketCreated"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          $ref: "#/components/responses/JiraError"
+        "503":
+          $ref: "#/components/responses/JiraUnavailable"
+    get:
+      tags: [Tickets]
+      summary: List recent tickets
+      description: |
+        Recent tickets read **live from Jira** every request. If no Jira
+        workspace is connected, returns an empty list with `unavailable: false`.
+        If Jira is unreachable, returns an empty list with `unavailable: true`.
+      security:
+        - sessionCookie: []
+        - apiKey: []
+      parameters:
+        - name: project_key
+          in: query
+          description: Restrict to a single project (uppercased server-side).
+          required: false
+          schema:
+            type: string
+            example: NHI
+        - name: limit
+          in: query
+          description: Max tickets to return (clamped to 1–100).
+          required: false
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Recent tickets.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tickets:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Ticket"
+                  unavailable:
+                    type: boolean
+                    description: True when Jira could not be reached.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/keys:
+    post:
+      tags: [API Keys]
+      summary: Generate an API key
+      description: |
+        Returns the full key **once** in the `key` field — it is stored only as a
+        SHA-256 hash and cannot be retrieved again.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApiKeyCreateRequest"
+      responses:
+        "201":
+          description: Key created. `key` is shown only in this response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyWithSecret"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    get:
+      tags: [API Keys]
+      summary: List active API keys
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Active keys (secrets are never returned).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ApiKey"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/keys/{key_id}:
+    delete:
+      tags: [API Keys]
+      summary: Revoke an API key
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: key_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          $ref: "#/components/responses/Message"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
+      description: Session cookie set by login/register.
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: An API key with the `nhk_` prefix. Ticket endpoints only.
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error name (e.g. ValidationError, NotFoundError).
+        message:
+          type: string
+          description: Human-readable message.
+      required: [error, message]
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+          format: email
+        has_jira_credentials:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+      required: [id, email, has_jira_credentials, created_at]
+
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        confirm_password:
+          type: string
+          description: When present, must equal `password`.
+      required: [email, password]
+
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      required: [email, password]
+
+    JiraCredentialsRequest:
+      type: object
+      properties:
+        site_url:
+          type: string
+          description: Jira site URL; must start with https://.
+          example: https://your-org.atlassian.net
+        email:
+          type: string
+          format: email
+          description: Atlassian account email.
+        api_token:
+          type: string
+          description: Atlassian API token.
+      required: [site_url, email, api_token]
+
+    JiraStatus:
+      type: object
+      properties:
+        connected:
+          type: boolean
+        site_url:
+          type: [string, "null"]
+        email_masked:
+          type: [string, "null"]
+          example: j***@example.com
+      required: [connected]
+
+    Project:
+      type: object
+      properties:
+        key:
+          type: string
+          example: NHI
+        name:
+          type: string
+        id:
+          type: string
+      required: [key, name, id]
+
+    TicketCreateRequest:
+      type: object
+      properties:
+        project_key:
+          type: string
+          description: Jira project key (uppercased server-side).
+          example: NHI
+        summary:
+          type: string
+          maxLength: 500
+        description:
+          type: string
+      required: [project_key, summary]
+
+    TicketCreated:
+      type: object
+      properties:
+        jira_key:
+          type: string
+          example: NHI-42
+        jira_id:
+          type: string
+        project_key:
+          type: string
+        summary:
+          type: string
+        description:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [web, api]
+          description: web = session request; api = X-API-Key request.
+      required: [jira_key, jira_id, project_key, summary, source]
+
+    Ticket:
+      type: object
+      properties:
+        id:
+          type: [integer, "null"]
+        jira_key:
+          type: string
+          example: NHI-42
+        jira_id:
+          type: string
+        project_key:
+          type: string
+        summary:
+          type: string
+        description:
+          type: [string, "null"]
+        source:
+          type: string
+          example: jira
+        created_at:
+          type: [string, "null"]
+          format: date-time
+
+    ApiKey:
+      type: object
+      properties:
+        id:
+          type: integer
+        user_id:
+          type: integer
+        key_prefix:
+          type: string
+          example: nhk_1a2b3c4d
+        label:
+          type: [string, "null"]
+        is_active:
+          type: boolean
+        last_used_at:
+          type: [string, "null"]
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+      required: [id, user_id, key_prefix, is_active, created_at]
+
+    ApiKeyWithSecret:
+      allOf:
+        - $ref: "#/components/schemas/ApiKey"
+        - type: object
+          properties:
+            key:
+              type: string
+              description: The full API key. Shown only once, at creation.
+              example: nhk_0123456789abcdef...
+          required: [key]
+
+    ApiKeyCreateRequest:
+      type: object
+      properties:
+        label:
+          type: [string, "null"]
+          maxLength: 100
+          description: Optional human-readable label.
+
+  responses:
+    Message:
+      description: Success message.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+    Unauthorized:
+      description: Authentication required or session expired.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ValidationError:
+      description: Invalid request.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ConflictError:
+      description: Conflict (e.g. email already registered).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    JiraError:
+      description: Jira returned an error (bad credentials or invalid response).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    JiraUnavailable:
+      description: Jira could not be reached (connection failure, timeout, or 5xx).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

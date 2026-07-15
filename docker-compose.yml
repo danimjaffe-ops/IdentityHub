@@ -1,0 +1,38 @@
+services:
+  app:
+    build: .
+    image: identityhub:qa
+    # Host port defaults to 8000 so the container can run alongside `make dev`
+    # (which uses 5000/5173) without a collision. Override with APP_PORT.
+    # The app always listens on 5000 *inside* the container.
+    ports:
+      - "${APP_PORT:-8000}:5000"
+    # Secrets (SECRET_KEY, FERNET_KEY, ANTHROPIC_API_KEY) come from your local
+    # .env — never baked into the image. Copy .env.example to .env first.
+    env_file:
+      - .env
+    environment:
+      # Run the real production config (no debug, gunicorn) for a faithful demo.
+      FLASK_ENV: production
+      # SQLite lives on the named volume so QA data survives restarts.
+      DATABASE_URL: sqlite:////data/identityhub.db
+      # Local QA is served over plain HTTP: the session cookie must NOT be
+      # marked Secure or the browser drops it and login silently fails.
+      # A real HTTPS deployment should remove this (defaults to secure).
+      SESSION_COOKIE_SECURE: "false"
+      GUNICORN_WORKERS: "3"
+    volumes:
+      - identityhub-data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import sys, urllib.request;
+          sys.exit(0 if urllib.request.urlopen('http://localhost:5000/').status == 200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  identityhub-data:

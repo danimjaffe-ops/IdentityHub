@@ -1,0 +1,8 @@
+# Backend test-only dependencies. Install on top of requirements.txt:
+#
+#   .venv/bin/pip install -r requirements-dev.txt
+#   .venv/bin/python -m playwright install chromium   # for the E2E suite
+#
+pytest==8.4.2
+pytest-playwright==0.7.1
+PyYAML==6.0.3
